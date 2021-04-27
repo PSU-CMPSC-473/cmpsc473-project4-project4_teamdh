@@ -9,9 +9,9 @@ state_t* buffer_create(int capacity)
     fifo_init(buffer->fifoQ,capacity);
     buffer->isopen = true;
     pthread_mutex_init(&(buffer->chmutex), NULL);
-    pthread_mutex_init(&(buffer->chclose), NULL);
-    pthread_cond_init(&(buffer->chconrec), NULL);
-    pthread_cond_init(&(buffer->chconsend), NULL);
+    // pthread_mutex_init(&(buffer->chclose), NULL);
+    pthread_cond_init(&(buffer->chconrec), NULL); //notempty
+    pthread_cond_init(&(buffer->chconsend), NULL); //notfull
     pthread_mutex_init(&(buffer->fifoQ->Qlock), NULL);
     return buffer;
 }
@@ -25,27 +25,27 @@ state_t* buffer_create(int capacity)
 // BUFFER_ERROR on encountering any other generic error of any sort
 enum buffer_status buffer_send(state_t *buffer, void* data)
 {
-    pthread_cond_lock(&(buffer->chconsend));
+    pthread_mutex_lock(&(buffer->chmutex));
     if(!buffer->isopen)
     {
-        pthread_cond_unlock(&(buffer->chconsend));
+        pthread_mutex_unlock(&(buffer->chmutex));
         return CLOSED_ERROR;
     }
-    pthread_cond_unlock(&(buffer->chconsend));
 
     int msg_size = get_msg_size(data);
-
-    pthread_mutex_lock(&(buffer->fifoQ->Qlock));
     if(fifo_avail_size(buffer->fifoQ) > msg_size)
     {
 	    buffer_add_Q(buffer,data);
-        pthread_mutex_unlock(&(buffer->fifoQ->Qlock));
-    	return BUFFER_SUCCESS;	
+        //pthread_mutex_unlock(&(buffer->fifoQ->Qlock));
+        //pthread_mutex_unlock(&(buffer->chmutex));
     }
     else{
-       pthread_mutex_unlock(&(buffer->fifoQ->Qlock)); 
-       return BUFFER_ERROR;
+       pthread_cond_wait(&(buffer->chconsend), &(buffer->chmutex));
+       //pthread_mutex_unlock(&(buffer->chmutex)); 
     }
+    pthread_cond_signal(&(buffer->chconrec));
+    pthread_mutex_unlock(&(buffer->chmutex));
+    return BUFFER_SUCCESS;
 }
 // test_send_correctness 1
 // Reads data from the given buffer and stores it in the function’s input parameter, data (Note that it is a double pointer).
@@ -58,30 +58,36 @@ enum buffer_status buffer_send(state_t *buffer, void* data)
 
 enum buffer_status buffer_receive(state_t* buffer, void** data)
 {
-    pthread_cond_lock(&(buffer->chconrec));
+    pthread_mutex_lock(&(buffer->chmutex));
     if(!buffer->isopen)
     {
-        pthread_cond_unlock(&(buffer->chconrec));
+        pthread_mutex_unlock(&(buffer->chmutex));
         return CLOSED_ERROR;
     }
-    pthread_cond_unlock(&(buffer->chconrec));
-
-    pthread_mutex_lock(&(buffer->fifoQ->Qlock));
+    int flag=0;
     if(buffer->fifoQ->avilSize < buffer->fifoQ->size)  // checking if there is something in the Q to remove
     {
-        pthread_mutex_unlock(&(buffer->fifoQ->Qlock));
+        
     	buffer_remove_Q(buffer,data);
     	if(strcmp(*(char**)(data),"splmsg") ==0)
     	{
-        	return BUFFER_SPECIAL_MESSSAGE;
+            pthread_mutex_unlock(&(buffer->chmutex));
+        	flag=1;
     	}
-    	return BUFFER_SUCCESS;
     }
     else{
-        pthread_mutex_unlock(&(buffer->fifoQ->Qlock));
-        return BUFFER_ERROR;
+        //pthread_mutex_unlock(&(buffer->fifoQ->Qlock));
+        pthread_cond_wait(&(buffer->chconrec),&(buffer->chmutex));
     }
-        
+    pthread_cond_signal(&(buffer->chconsend));
+    pthread_mutex_unlock(&(buffer->chmutex));
+    if(flag==1){
+        return BUFFER_SPECIAL_MESSSAGE;
+    }
+    else{
+        return BUFFER_SUCCESS;
+    }
+    
     
 }
 
@@ -93,14 +99,14 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
 // BUFFER_ERROR in any other error case
 enum buffer_status buffer_close(state_t* buffer)
 {
-    pthread_mutex_lock(&(buffer->chclose));
+    pthread_mutex_lock(&(buffer->chmutex));
     if(!buffer->isopen)
     {
-        pthread_mutex_unlock(&(buffer->chclose));
+        //pthread_mutex_unlock(&(buffer->chmutex));
         return CLOSED_ERROR;
     }
     buffer->isopen = false;
-    pthread_mutex_unlock(&(buffer->chclose));
+    pthread_mutex_unlock(&(buffer->chmutex));
     return BUFFER_SUCCESS;
     
 }
