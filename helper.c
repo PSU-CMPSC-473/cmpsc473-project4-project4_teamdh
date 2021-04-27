@@ -26,19 +26,23 @@ state_t* buffer_create(int capacity)
 enum buffer_status buffer_send(state_t *buffer, void* data)
 {
     
-    if(!buffer->isopen)
-    {
-        //pthread_mutex_unlock(&(buffer->chmutex));
-        return CLOSED_ERROR;
-    }
-
     pthread_mutex_lock(&(buffer->chmutex));
+    if(!buffer->isopen)
+        {
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
     int msg_size = get_msg_size(data);
     while(fifo_avail_size(buffer->fifoQ)<msg_size){
         pthread_cond_wait(&(buffer->chconsend), &(buffer->chmutex));
+        if(!buffer->isopen)
+        {
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
     }
     buffer_add_Q(buffer,data);
-    pthread_cond_signal(&(buffer->chconrec));
+    pthread_cond_broadcast(&(buffer->chconrec));
     pthread_mutex_unlock(&(buffer->chmutex));
     return BUFFER_SUCCESS;
 }
@@ -53,22 +57,28 @@ enum buffer_status buffer_send(state_t *buffer, void* data)
 
 enum buffer_status buffer_receive(state_t* buffer, void** data)
 {
-    if(!buffer->isopen)
-    {
-        //pthread_mutex_unlock(&(buffer->chmutex));
-        return CLOSED_ERROR;
-    }
+    
     int flag=0;
     pthread_mutex_lock(&(buffer->chmutex));
+    if(!buffer->isopen)
+    {
+        pthread_mutex_unlock(&(buffer->chmutex));
+        return CLOSED_ERROR;
+    }
     while(buffer->fifoQ->avilSize >= buffer->fifoQ->size){
         pthread_cond_wait(&(buffer->chconrec),&(buffer->chmutex));
+        if(!buffer->isopen)
+        {
+            pthread_mutex_unlock(&(buffer->chmutex));
+            return CLOSED_ERROR;
+        }
     }
     buffer_remove_Q(buffer,data);
     if(strcmp(*(char**)(data),"splmsg") ==0)
     {
         flag=1;
     }
-    pthread_cond_signal(&(buffer->chconsend));
+    pthread_cond_broadcast(&(buffer->chconsend));
     pthread_mutex_unlock(&(buffer->chmutex));
     if(flag==1){
         return BUFFER_SPECIAL_MESSSAGE;
@@ -91,10 +101,12 @@ enum buffer_status buffer_close(state_t* buffer)
     pthread_mutex_lock(&(buffer->chmutex));
     if(!buffer->isopen)
     {
-        //pthread_mutex_unlock(&(buffer->chmutex));
+        pthread_mutex_unlock(&(buffer->chmutex));
         return CLOSED_ERROR;
     }
     buffer->isopen = false;
+    pthread_cond_broadcast(&(buffer->chconsend));
+    pthread_cond_broadcast(&(buffer->chconrec));
     pthread_mutex_unlock(&(buffer->chmutex));
     return BUFFER_SUCCESS;
     
