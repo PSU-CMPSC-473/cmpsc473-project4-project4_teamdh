@@ -25,15 +25,16 @@ state_t* buffer_create(int capacity)
 // BUFFER_ERROR on encountering any other generic error of any sort
 enum buffer_status buffer_send(state_t *buffer, void* data)
 {
-    
-    pthread_mutex_lock(&(buffer->chmutex));
     if(!buffer->isopen)
         {
-            pthread_mutex_unlock(&(buffer->chmutex));
+            //pthread_mutex_unlock(&(buffer->chmutex));
             return CLOSED_ERROR;
         }
+
+    pthread_mutex_lock(&(buffer->chmutex));
     int msg_size = get_msg_size(data);
-    while(fifo_avail_size(buffer->fifoQ)<msg_size){
+    
+    while(fifo_avail_size(buffer->fifoQ)<=msg_size){
         pthread_cond_wait(&(buffer->chconsend), &(buffer->chmutex));
         if(!buffer->isopen)
         {
@@ -59,12 +60,14 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
 {
     
     int flag=0;
-    pthread_mutex_lock(&(buffer->chmutex));
+    
     if(!buffer->isopen)
     {
-        pthread_mutex_unlock(&(buffer->chmutex));
+        //pthread_mutex_unlock(&(buffer->chmutex));
         return CLOSED_ERROR;
     }
+    pthread_mutex_lock(&(buffer->chmutex));
+
     while(buffer->fifoQ->avilSize >= buffer->fifoQ->size){
         pthread_cond_wait(&(buffer->chconrec),&(buffer->chmutex));
         if(!buffer->isopen)
@@ -74,12 +77,14 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
         }
     }
     buffer_remove_Q(buffer,data);
+
+    pthread_cond_broadcast(&(buffer->chconsend));
+    pthread_mutex_unlock(&(buffer->chmutex));
+
     if(strcmp(*(char**)(data),"splmsg") ==0)
     {
         flag=1;
     }
-    pthread_cond_broadcast(&(buffer->chconsend));
-    pthread_mutex_unlock(&(buffer->chmutex));
     if(flag==1){
         return BUFFER_SPECIAL_MESSSAGE;
     }
@@ -120,11 +125,14 @@ enum buffer_status buffer_close(state_t* buffer)
 
 enum buffer_status buffer_destroy(state_t* buffer)
 {
-    
     if(buffer->isopen)
     {
         return DESTROY_ERROR;
     }
+    pthread_mutex_destroy(&(buffer->chmutex));
+    pthread_mutex_destroy(&(buffer->chclose));
+    pthread_cond_destroy(&(buffer->chconrec));
+    pthread_cond_destroy(&(buffer->chconsend));
     fifo_free(buffer->fifoQ);
     free(buffer);
     return BUFFER_SUCCESS;
