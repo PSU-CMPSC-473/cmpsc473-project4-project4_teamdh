@@ -8,11 +8,14 @@ state_t* buffer_create(int capacity)
     buffer->fifoQ = (fifo_t *) malloc ( sizeof (fifo_t));
     fifo_init(buffer->fifoQ,capacity);
     buffer->isopen = true;
+
+// Initializing all the required threads used in the code.
     pthread_mutex_init(&(buffer->chmutex), NULL);
     pthread_mutex_init(&(buffer->chclose), NULL);
-    pthread_cond_init(&(buffer->chconrec), NULL); //notempty
-    pthread_cond_init(&(buffer->chconsend), NULL); //notfull
-    //pthread_mutex_init(&(buffer->fifoQ->Qlock), NULL);
+
+    //Conditional variables that will need a signal to lock and unlock
+    pthread_cond_init(&(buffer->chconrec), NULL); // Used in place of not empty 
+    pthread_cond_init(&(buffer->chconsend), NULL); // Used in place of not full
     return buffer;
 }
 
@@ -27,23 +30,25 @@ enum buffer_status buffer_send(state_t *buffer, void* data)
 {
     if(!buffer->isopen)
         {
-            //pthread_mutex_unlock(&(buffer->chmutex));
             return CLOSED_ERROR;
         }
-
+    // Locking the buffer to correctly compare size 
     pthread_mutex_lock(&(buffer->chmutex));
     int msg_size = get_msg_size(data);
     
+    // Running while loop for waiting if other threads have a lock for receive.
     while(fifo_avail_size(buffer->fifoQ)<=msg_size){
-        pthread_cond_wait(&(buffer->chconsend), &(buffer->chmutex));
-        if(!buffer->isopen)
+        pthread_cond_wait(&(buffer->chconsend), &(buffer->chmutex)); //Waits for buffer to have available space to send.
+        
+        if(!buffer->isopen)  // to handle close with send.
         {
             pthread_mutex_unlock(&(buffer->chmutex));
             return CLOSED_ERROR;
         }
     }
+
     buffer_add_Q(buffer,data);
-    pthread_cond_broadcast(&(buffer->chconrec));
+    pthread_cond_broadcast(&(buffer->chconrec));  //broadcasts to other threads to unlock conrec.
     pthread_mutex_unlock(&(buffer->chmutex));
     return BUFFER_SUCCESS;
 }
@@ -63,14 +68,16 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
     
     if(!buffer->isopen)
     {
-        //pthread_mutex_unlock(&(buffer->chmutex));
         return CLOSED_ERROR;
     }
+
+    //Locking the buffer to make sure that buffer is empty condition works well.
     pthread_mutex_lock(&(buffer->chmutex));
 
     while(buffer->fifoQ->avilSize >= buffer->fifoQ->size){
-        pthread_cond_wait(&(buffer->chconrec),&(buffer->chmutex));
-        if(!buffer->isopen)
+        pthread_cond_wait(&(buffer->chconrec),&(buffer->chmutex)); // Waits till buffer has something to receive.
+        
+        if(!buffer->isopen) // handle to close with receive.
         {
             pthread_mutex_unlock(&(buffer->chmutex));
             return CLOSED_ERROR;
@@ -78,6 +85,7 @@ enum buffer_status buffer_receive(state_t* buffer, void** data)
     }
     buffer_remove_Q(buffer,data);
 
+    //Sends signal to unlock the threads waiting in send.
     pthread_cond_broadcast(&(buffer->chconsend));
     pthread_mutex_unlock(&(buffer->chmutex));
 
@@ -110,7 +118,7 @@ enum buffer_status buffer_close(state_t* buffer)
         return CLOSED_ERROR;
     }
     buffer->isopen = false;
-    pthread_cond_broadcast(&(buffer->chconsend));
+    pthread_cond_broadcast(&(buffer->chconsend));  //broadcasts signals to other threads to handle close cases.
     pthread_cond_broadcast(&(buffer->chconrec));
     pthread_mutex_unlock(&(buffer->chmutex));
     return BUFFER_SUCCESS;
@@ -129,6 +137,7 @@ enum buffer_status buffer_destroy(state_t* buffer)
     {
         return DESTROY_ERROR;
     }
+    // Destroys all threads to ensure safety of code.
     pthread_mutex_destroy(&(buffer->chmutex));
     pthread_mutex_destroy(&(buffer->chclose));
     pthread_cond_destroy(&(buffer->chconrec));
