@@ -1,6 +1,13 @@
 #include "buffer.h"
 #include <pthread.h>
 
+/*
+ * helper.c
+ * Two members for the project4
+ * Name: Deep Harkhani (dph5402), Arpit Singla (abs6339)
+ *
+ */
+
 // Creates a buffer with the given capacity
 state_t* buffer_create(int capacity)
 {
